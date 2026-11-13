@@ -3,8 +3,12 @@ name = "mod-fixer"
 version = "0.1.0"
 edition = "2024"
 authors = ["trekkie22de <trekkie22de@gmail.com>"]
-description = "Forensic analyzer and surgical sample repair tool for classic Amiga/PC Tracker modules (.MOD)"
+description = "Forensic analyzer and surgical sample repair CLI for classic Amiga/PC Tracker modules (.MOD)"
 license = "MIT"
+repository = "https://github.com/trekkie22de/ModFixer"
+readme = "README.md"
+keywords = ["protracker", "amiga", "mod", "audio-restoration", "demoscene"]
+categories = ["command-line-utilities", "multimedia::audio"]
 
 [[bin]]
 name = "mod-fixer"

@@ -1,5 +1,6 @@
 /target
+/dist
+/test_out
 *.bak
 *.orig
 *.wav
-/test_out/

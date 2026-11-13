@@ -15,17 +15,19 @@ fn print_usage() {
 USAGE:
   mod-fixer analyze <file.mod | directory> [--only-defects]
   mod-fixer fix <input.mod> [-o <output.mod> | --in-place] [OPTIONS]
+  mod-fixer fix <input_dir> -o <output_dir> [OPTIONS]
 
 OPTIONS:
-  -o, --output <path>     Output .MOD path (default: <stem>_fixed.mod)
-      --in-place          Overwrite input file (creates <input>.bak backup unless --no-backup)
+  -o, --output <path>     Output .MOD file or output directory (default for single file: <stem>_fixed.mod)
+      --in-place          Overwrite input file(s) (creates <file>.bak backup unless --no-backup)
       --no-backup         Do not create .bak when using --in-place
       --no-strip-headers  Disable stripping embedded IFF 8SVX / RIFF WAVE / VOC headers
       --no-trim-tails     Disable truncating post-silence bursts, late-tail bursts & dead tails
       --no-splice-bursts  Disable splicing mid-sample sector/transfer corruption islands
       --no-fade-cliffs    Disable smoothing abrupt non-zero end cliffs
-      --dump-wav <dir>    Export before/after 16-bit WAV files for every repaired sample
+      --dump-wav <dir>    Export before/after 16-bit WAV files for every repaired sample (single-file mode)
       --only-defects      In directory analyze mode, list only modules with detected defects
+  -V, --version           Print version information
   -h, --help              Print this help message",
         env!("CARGO_PKG_VERSION")
     );
@@ -35,6 +37,10 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         print_usage();
+        return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "-V" || a == "--version") {
+        println!("mod-fixer {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
 
@@ -102,7 +108,13 @@ fn main() -> ExitCode {
 
     match mode {
         "analyze" => run_analyze(&target_path, only_defects),
-        "fix" => run_fix(&target_path, output, in_place, no_backup, opts, dump_wav),
+        "fix" => {
+            if target_path.is_dir() {
+                run_fix_dir(&target_path, output, in_place, no_backup, opts)
+            } else {
+                run_fix_file(&target_path, output, in_place, no_backup, opts, dump_wav)
+            }
+        }
         _ => unreachable!(),
     }
 }
@@ -179,7 +191,88 @@ fn run_analyze(path: &Path, only_defects: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_fix(
+fn run_fix_dir(
+    input_dir: &Path,
+    output_dir_opt: Option<PathBuf>,
+    in_place: bool,
+    no_backup: bool,
+    opts: FixOptions,
+) -> ExitCode {
+    if !in_place && output_dir_opt.is_none() {
+        eprintln!("Error: fixing a directory requires either '-o <output_dir>' or '--in-place'");
+        return ExitCode::FAILURE;
+    }
+
+    let mut files = Vec::new();
+    collect_mod_files(input_dir, &mut files);
+    files.sort();
+
+    let mut scanned = 0usize;
+    let mut repaired = 0usize;
+    let mut saved_bytes: isize = 0;
+
+    for f in &files {
+        let Ok(bytes) = fs::read(f) else { continue };
+        let Ok(mut module) = ModFile::parse(&bytes) else {
+            continue;
+        };
+        scanned += 1;
+
+        let summary = fix_module(&mut module, opts);
+        if summary.sample_actions.is_empty() {
+            continue;
+        }
+
+        let Ok(out_bytes) = module.to_bytes() else {
+            continue;
+        };
+
+        let dest = if in_place {
+            if !no_backup {
+                let bak = PathBuf::from(format!("{}.bak", f.display()));
+                if let Err(e) = fs::copy(f, &bak) {
+                    eprintln!("Error creating backup '{}': {e}", bak.display());
+                    return ExitCode::FAILURE;
+                }
+            }
+            f.clone()
+        } else {
+            let out_root = output_dir_opt.as_ref().unwrap();
+            let rel = f.strip_prefix(input_dir).unwrap_or(f);
+            let target = out_root.join(rel);
+            if let Some(parent) = target.parent()
+                && let Err(e) = fs::create_dir_all(parent)
+            {
+                eprintln!("Error creating directory '{}': {e}", parent.display());
+                return ExitCode::FAILURE;
+            }
+            target
+        };
+
+        if let Err(e) = fs::write(&dest, &out_bytes) {
+            eprintln!("Error writing '{}': {e}", dest.display());
+            return ExitCode::FAILURE;
+        }
+
+        let delta = (out_bytes.len() as isize) - (bytes.len() as isize);
+        saved_bytes += delta;
+        repaired += 1;
+        println!(
+            "[FIXED {:2} smp | {:+6} B] {} -> {}",
+            summary.sample_actions.len(),
+            delta,
+            f.display(),
+            dest.display()
+        );
+    }
+
+    println!(
+        "\n=== Batch Fix Summary: {scanned} valid .MOD files scanned | {repaired} repaired (total delta: {saved_bytes:+} B) ==="
+    );
+    ExitCode::SUCCESS
+}
+
+fn run_fix_file(
     input_path: &Path,
     output_opt: Option<PathBuf>,
     in_place: bool,
@@ -243,7 +336,10 @@ fn run_fix(
             let _ = write_sample_wav(&before_wav, &orig_module.samples[idx], 14037);
             let _ = write_sample_wav(&after_wav, &fixed_module.samples[idx], 14037);
         }
-        println!("  Exported before/after WAVs (14037 Hz) to '{}'", wav_dir.display());
+        println!(
+            "  Exported before/after WAVs (14037 Hz) to '{}'",
+            wav_dir.display()
+        );
     }
 
     let out_bytes = match fixed_module.to_bytes() {
