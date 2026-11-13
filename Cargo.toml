@@ -1,0 +1,16 @@
+[package]
+name = "mod-fixer"
+version = "0.1.0"
+edition = "2024"
+authors = ["trekkie22de <trekkie22de@gmail.com>"]
+description = "Forensic analyzer and surgical sample repair tool for classic Amiga/PC Tracker modules (.MOD)"
+license = "MIT"
+
+[[bin]]
+name = "mod-fixer"
+path = "src/main.rs"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
